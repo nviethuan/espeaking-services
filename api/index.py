@@ -15,7 +15,20 @@ from pydantic import BaseModel, Field
 MAX_LEN = 5000
 
 app = FastAPI(title="English → IPA API", version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+def _cors_origins() -> list[str]:
+    """CORS_ORIGIN="https://abc.com,https://def.com" (để trống = không cho origin nào)."""
+    raw = os.getenv("CORS_ORIGIN", "")
+    return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 
 
 @app.middleware("http")
