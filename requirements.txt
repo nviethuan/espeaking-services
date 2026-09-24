@@ -1,0 +1,5 @@
+fastapi>=0.110
+uvicorn>=0.29
+cmudict>=1.0.13
+espeakng-loader>=0.2.4
+phonemizer-fork>=3.3.2
