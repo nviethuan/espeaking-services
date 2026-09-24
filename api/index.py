@@ -1,12 +1,14 @@
 """FastAPI server: English text -> IPA (dựa trên CMU Pronouncing Dictionary)."""
 import os
 import re
+import secrets
 import threading
 from functools import lru_cache
 from typing import Optional
 
 import cmudict
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -28,6 +30,25 @@ async def restore_original_path(request, call_next):
     elif path == "/api/index" or path.startswith("/api/index/"):
         request.scope["path"] = path[len("/api/index"):] or "/"
     return await call_next(request)
+
+
+security = HTTPBasic()
+
+
+def require_auth(credentials: HTTPBasicCredentials = Depends(security)):
+    """Basic auth; user/password lấy từ ENV BASIC_AUTH_USER / BASIC_AUTH_PASSWORD."""
+    user = os.getenv("BASIC_AUTH_USER")
+    password = os.getenv("BASIC_AUTH_PASSWORD")
+    if not user or not password:  # thiếu cấu hình -> từ chối, không mở public
+        raise HTTPException(status_code=500, detail="Chưa cấu hình BASIC_AUTH_USER / BASIC_AUTH_PASSWORD")
+    ok_user = secrets.compare_digest(credentials.username.encode(), user.encode())
+    ok_pass = secrets.compare_digest(credentials.password.encode(), password.encode())
+    if not (ok_user and ok_pass):
+        raise HTTPException(
+            status_code=401,
+            detail="Sai tên đăng nhập hoặc mật khẩu",
+            headers={"WWW-Authenticate": "Basic"},
+        )
 
 
 # Load 1 lần khi cold start
@@ -108,7 +129,11 @@ def convert(text: str, stress: bool) -> IPAResponse:
 def root():
     return {
         "service": "English → IPA",
-        "usage": {"GET": "/ipa?text=hello world", "POST": "/ipa {\"text\": \"hello world\"}"},
+        "usage": {
+            "POST /espeak": {"text": "hello world", "lang": "en-us (tuỳ chọn)", "stress": True},
+            "GET /ipa?text=hello world": "tra từ điển CMU",
+            "auth": "HTTP Basic",
+        },
         "docs": "/docs",
     }
 
@@ -118,12 +143,12 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/ipa", response_model=IPAResponse)
+@app.get("/ipa", response_model=IPAResponse, dependencies=[Depends(require_auth)])
 def ipa_get(text: str = Query(..., min_length=1, max_length=MAX_LEN), stress: bool = True):
     return convert(text, stress)
 
 
-@app.post("/ipa", response_model=IPAResponse)
+@app.post("/ipa", response_model=IPAResponse, dependencies=[Depends(require_auth)])
 def ipa_post(body: IPARequest):
     return convert(body.text, body.stress)
 
@@ -164,17 +189,19 @@ class EspeakResponse(BaseModel):
     ipa: str
 
 
-@app.get("/espeak", response_model=EspeakResponse)
-def espeak(
-    text: str = Query(..., min_length=1, max_length=MAX_LEN),
-    lang: str = "en-us",
-    stress: bool = True,
-):
+class EspeakRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=MAX_LEN)
+    lang: str = "en-us"
+    stress: bool = True
+
+
+@app.post("/espeak", response_model=EspeakResponse, dependencies=[Depends(require_auth)])
+def espeak(body: EspeakRequest):
     with _espeak_lock:
         try:
             _init_espeak()
-            backend = _backend(lang, stress)
+            backend = _backend(body.lang, body.stress)
         except RuntimeError as e:
-            raise HTTPException(status_code=400, detail=f"Ngôn ngữ không hỗ trợ: {lang} ({e})")
-        ipa = backend.phonemize([text], strip=True)[0]
-    return EspeakResponse(text=text, lang=lang, ipa=ipa.strip())
+            raise HTTPException(status_code=400, detail=f"Ngôn ngữ không hỗ trợ: {body.lang} ({e})")
+        ipa = backend.phonemize([body.text], strip=True)[0]
+    return EspeakResponse(text=body.text, lang=body.lang, ipa=ipa.strip())
