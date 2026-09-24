@@ -17,12 +17,18 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 
 @app.middleware("http")
-async def strip_function_prefix(request, call_next):
-    """Cho phép gọi cả /api/index/... (đường dẫn function của Vercel) lẫn /..."""
+async def restore_original_path(request, call_next):
+    """Trên Vercel, rewrite có thể làm function nhận path /api/index thay vì path gốc.
+    vercel.json gửi path gốc qua query `__path`; ở đây khôi phục lại để FastAPI route đúng.
+    Vẫn chạy bình thường khi không có `__path` (local, Docker)."""
     path = request.scope["path"]
-    if path == "/api/index" or path.startswith("/api/index/"):
+    forwarded = request.query_params.get("__path")
+    if forwarded is not None:
+        request.scope["path"] = "/" + forwarded.lstrip("/")
+    elif path == "/api/index" or path.startswith("/api/index/"):
         request.scope["path"] = path[len("/api/index"):] or "/"
     return await call_next(request)
+
 
 # Load 1 lần khi cold start
 CMU = cmudict.dict()
@@ -172,4 +178,3 @@ def espeak(
             raise HTTPException(status_code=400, detail=f"Ngôn ngữ không hỗ trợ: {lang} ({e})")
         ipa = backend.phonemize([text], strip=True)[0]
     return EspeakResponse(text=text, lang=lang, ipa=ipa.strip())
-    
