@@ -15,6 +15,15 @@ MAX_LEN = 5000
 app = FastAPI(title="English → IPA API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+
+@app.middleware("http")
+async def strip_function_prefix(request, call_next):
+    """Cho phép gọi cả /api/index/... (đường dẫn function của Vercel) lẫn /..."""
+    path = request.scope["path"]
+    if path == "/api/index" or path.startswith("/api/index/"):
+        request.scope["path"] = path[len("/api/index"):] or "/"
+    return await call_next(request)
+
 # Load 1 lần khi cold start
 CMU = cmudict.dict()
 
@@ -163,3 +172,4 @@ def espeak(
             raise HTTPException(status_code=400, detail=f"Ngôn ngữ không hỗ trợ: {lang} ({e})")
         ipa = backend.phonemize([text], strip=True)[0]
     return EspeakResponse(text=text, lang=lang, ipa=ipa.strip())
+    
